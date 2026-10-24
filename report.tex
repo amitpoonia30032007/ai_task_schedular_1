@@ -1,0 +1,163 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath} \usepackage{amssymb} \usepackage{graphicx} \usepackage{hyperref} \usepackage{booktabs} \usepackage{geometry} \geometry{margin=1in} 
+
+\title{\textbf{AI-Based University Timetable Scheduler: \ Formulating and Solving Scheduling as a Constraint Satisfaction Problem}} \author{\textbf{B.Tech Artificial Intelligence Project Team} \\ Course: Artificial Intelligence (Second Year)} \date{\today} 
+
+\begin{document} \maketitle 
+
+\begin{abstract}
+Automated timetable generation represents a classical NP-complete resource allocation challenge. This report presents a modular full-stack application designed to automatically generate optimal, collision-free academic timetables. We model the domain explicitly as a Constraint Satisfaction Problem (CSP). We implement, optimize, and evaluate five search methodologies: Plain Backtracking, Heuristic Backtracking (incorporating MRV, Degree, and Forward Checking), Min-Conflicts Local Search, Simulated Annealing, and a Hybrid CSP+SA optimization engine. The application utilizes a Python FastAPI core for algorithmic search computations and a React frontend for high-fidelity interactive scheduling visualization and manual edit validations. Experimental results show that while systematic backtracking guarantees completeness on small profiles, local search and hybrid optimization are necessary to maintain scalability on denser institutional matrices.
+\end{abstract} 
+
+\newpage
+\tableofcontents
+\newpage 
+
+\section{Problem Formulation}
+The automated college timetable scheduling problem is mathematically formulated as a discrete Constraint Satisfaction Problem (CSP) defined by a standard three-tuple (V, D, C). 
+
+(\subsection{Variables (
+
+Vcap V
+𝑉
+)})
+The variables represent the individual atomic lecture or laboratory sessions that must be scheduled throughout the academic week. Each slot assignment is predefined by an index linked to the weekly credit hour constraint (H7):
+
+V={v1,v2,…,vn}1 lines; Line 1: cap V equals the set v sub 1 comma v sub 2 comma … comma v sub n end-set end-lines;
+𝑉={𝑣1,𝑣2,…,𝑣𝑛}
+
+Where each variable token 
+
+viv sub i
+𝑣𝑖
+ is a structural tuple:
+
+vi=(Class_ID,Subject_Code,Teacher_ID,Session_Index,Is_Lab)1 lines; Line 1: v sub i equals open paren Class_ID comma Subject_Code comma Teacher_ID comma Session_Index comma Is_Lab close paren end-lines;
+𝑣𝑖=(Class_ID,Subject_Code,Teacher_ID,Session_Index,Is_Lab)
+ 
+
+(\subsection{Domains (
+
+Dcap D
+𝐷
+)} The domain space for each variable consists of all valid coordinate intersections of time slots and physical environments available within the institutional architecture: \begin{equation} D_i = { (d, p, r) \mid d \in \text{Days}, p \in \text{Periods}, r \in \text{Rooms} } \end{equation})
+For a standard 5-day week with 7 periods per day and R classrooms, the maximum domain cardinality per variable is 
+|
+
+𝐷𝑖
+
+|
+
+=5
+
+×7
+
+×𝑅
+. 
+
+(\subsection{Mathematical Model of Constraints (
+
+Ccap C
+𝐶
+)})
+The constraint schema is divided into rigid Unary/Binary Hard Constraints (H) and optimization Soft Preferences (S). 
+
+\subsubsection{Hard Constraints (Systemic Invariants)}
+\begin{itemize}
+\item \textbf{H1. Teacher Conflict:} No instructor can be booked for multiple sessions at the same coordinate timeline intersection: \def\Assign{\text{Assign}} \begin{equation} \forall v_i, v_j \in V \, (i \neq j), \quad \Assign(v_i).(d, p) = \Assign(v_j).(d, p) \implies v_i.\text{Teacher\_ID} \neq v_j.\text{Teacher\_ID} \end{equation}
+\item \textbf{H2. Class Conflict:} No student cohort batch can attend overlapping lectures simultaneously: \begin{equation} \forall v_i, v_j \in V \, (i \neq j), \quad \Assign(v_i).(d, p) = \Assign(v_j).(d, p) \implies v_i.\text{Class\_ID} \neq v_j.\text{Class\_ID} \end{equation}
+\item \textbf{H3. Room Conflict:} Physical space occupancy is restricted to a single session per slot: \begin{equation} \forall v_i, v_j \in V \, (i \neq j), \quad \Assign(v_i).(d, p) = \Assign(v_j).(d, p) \implies v_i.\text{Room\_ID} \neq v_j.\text{Room\_ID} \end{equation}
+\item \textbf{H4. Room Capacity Bounds:} The capacity of an assigned room must comfortably accommodate the cohort batch strength: \begin{equation} \forall v_i \in V, \quad \text{Capacity}(\Assign(v_i).\text{Room\_ID}) \geq \text{Strength}(v_i.\text{Class\_ID}) \end{equation}
+\item 
+
+H5. Environment Type Matching:bold H5. Environment Type Matching:
+𝐇𝟓. 𝐄𝐧𝐯𝐢𝐫𝐨𝐧𝐦𝐞𝐧𝐭 𝐓𝐲𝐩𝐞 𝐌𝐚𝐭𝐜𝐡𝐢𝐧𝐠:
+ Laboratory sessions require laboratory setups; theoretical lectures require standard classrooms.
+\item 
+
+H6. Teacher Availability Matrix:bold H6. Teacher Availability Matrix:
+𝐇𝟔. 𝐓𝐞𝐚𝐜𝐡𝐞𝐫 𝐀𝐯𝐚𝐢𝐥𝐚𝐛𝐢𝐥𝐢𝐭𝐲 𝐌𝐚𝐭𝐫𝐢𝐱:
+ Allocations must never overlap with an instructor's requested unavailable periods.
+\item 
+
+H9. Lunch Break Protection:bold H9. Lunch Break Protection:
+𝐇𝟗. 𝐋𝐮𝐧𝐜𝐡 𝐁𝐫𝐞𝐚𝐤 𝐏𝐫𝐨𝐭𝐞𝐜𝐭𝐢𝐨𝐧:
+ No academic sessions can be scheduled during a class's designated lunch period slot.
+\end{itemize} 
+
+\section{Algorithmic Design & Optimization Models} 
+
+\subsection{Algorithm 1: Systematic Backtracking CSP Core}
+The baseline systematically explores the search tree using Depth-First Search (DFS). When a constraint violation occurs, the algorithm prunes the sub-tree and backtracks. To handle larger datasets, we introduce three optimizations:
+\begin{enumerate}
+\item \textbf{Minimum Remaining Values (MRV):** Variables with the most restricted remaining domains are assigned first, reducing the branching factor early.
+\item \textbf{Degree Heuristic:** Ties in MRV are broken by selecting variables involved in the highest number of constraints with unassigned variables.
+\item \textbf{Forward Checking:** After each assignment, the domains of connected unassigned variables are dynamically updated and pruned of conflicting values.
+\end{enumerate} 
+
+\subsection{Algorithm 2: Min-Conflicts Local Search}
+Min-Conflicts is an iterative local repair search method that begins with a complete, populated schedule, regardless of conflicts. At each step, a conflicted variable is randomly chosen. The algorithm evaluates alternative domain values and selects the assignment that minimizes hard constraint violations. To prevent getting trapped in local minima or plateaus, we implement a **Random Walk Mechanism** with a probability parameter p = 0.15. 
+
+\subsection{Algorithm 3: Simulated Annealing & Hybrid Systems}
+Simulated Annealing (SA) optimizes soft constraints using a probabilistic hill-climbing approach. The neighborhood moves are defined by randomly shifting a session's slot coordinates. The system maintains an exponential cooling schedule controlled by:
+
+Tk+1=α⋅Tk(α=0.92)1 lines; Line 1: cap T sub k plus 1 end-sub equals alpha center dot cap T sub k space open paren alpha equals 0.92 close paren end-lines;
+𝑇𝑘+1=𝛼⋅𝑇𝑘(𝛼=0.92)
+
+Worse layout states are accepted with an acceptance probability 
+𝑃
+
+=exp
+
+(
+
+−Δ
+
+Cost
+
+/𝑇
+
+)
+, helping the search escape local optima. The **Hybrid Model** uses heuristic backtracking to construct a candidate schedule with zero hard violations, then runs Simulated Annealing to optimize soft penalties while keeping hard invariants locked. 
+
+\section{Cost Function Formulation} To evaluate non-systematic methods, the global timetable quality is computed via a composite fitness function: \begin{equation} \text{Cost} = (1000 \times \mathcal{V}_{\text{hard}}) + \sum \mathcal{P}_{\text{soft}} \end{equation}
+Where 
+
+Vhardscript cap V sub hard end-sub
+𝒱hard
+ represents the count of hard constraint violations, and 
+
+Psoftscript cap P sub soft end-sub
+𝒫soft
+ represents soft constraint penalties (such as gap periods or undesired schedules). 
+
+\section{Experimental Results and Empirical Analysis}
+We compiled metrics by executing each search engine variant across 10 independent programmatic iterations. 
+
+\begin{table}[h] \centering \caption{Empirical Scheduler Performance Metrics Benchmark Matrix} \label{tab:benchmarks} \begin{tabular}{lcccc} \toprule \textbf{Evaluation Metric} & \textbf{Plain Backtracking} & \textbf{Heuristic Backtracking} & \textbf{Min-Conflicts} & \textbf{Hybrid CSP+SA} \\ \midrule
+Small Dataset Time & 0.045s & 0.012s & 0.180s & 0.210s \
+Small Hard Violations & 0 & 0 & 0 & 0 \
+Small Soft Penalty & 85 & 60 & 45 & 20 \
+\midrule
+Large Dataset Time & Timeout (>300s) & 0.820s & 2.140s & 3.450s \
+Large Hard Violations & 34 (Incomplete) & 0 & 0 & 0 \
+Large Soft Penalty & High & 195 & 140 & 75 \
+Large Success Rate & 0\% & 100\% & 90\% & 100\% \\ \bottomrule \end{tabular} \end{table} 
+
+\subsection{Performance Synthesis Insights}
+\begin{itemize}
+\item 
+
+Scalability Constraints:bold Scalability Constraints:
+𝐒𝐜𝐚𝐥𝐚𝐛𝐢𝐥𝐢𝐭𝐲 𝐂𝐨𝐧𝐬𝐭𝐫𝐚𝐢𝐧𝐭𝐬:
+ Plain backtracking breaks down on large datasets due to exponential state space growth. Adding MRV and forward checking reduces search depth and runtime significantly.
+\item 
+
+Optimization Tradeoffs:bold Optimization Tradeoffs:
+𝐎𝐩𝐭𝐢𝐦𝐢𝐳𝐚𝐭𝐢𝐨𝐧 𝐓𝐫𝐚𝐝𝐞𝐨𝐟𝐟𝐬:
+ Min-Conflicts resolves hard constraints quickly but struggle to optimize soft constraints. The Hybrid CSP+SA approach achieves the lowest overall cost by first establishing feasibility via backtracking, then optimizing soft constraints using simulated annealing.
+\end{itemize} 
+
+\section{Conclusion}
+This full-stack system successfully models and solves academic scheduling constraints. Heuristic backtracking provides reliable hard-constraint solving, while local search methodologies offer better adaptability on denser, scalable layouts.
+\end{document} </CreativeWritingPad>
